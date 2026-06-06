@@ -3,3 +3,5 @@ node_modules
 .env.local.example
 .env
 .firebaserc
+ToDo
+.next

@@ -1,6 +1,7 @@
 // pages/api/stats.ts
 import type { NextApiRequest, NextApiResponse } from "next";
-import { adminFirestore } from "../../firebase/admin";
+import { adminFirestore, adminAuth } from "../../firebase/admin";
+import { parseCookies } from "nookies";
 
 /**
  * GET /api/stats
@@ -8,12 +9,25 @@ import { adminFirestore } from "../../firebase/admin";
  * Counts: total approved reports, unique e-wallet providers reported, unique reporters.
  */
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  if (req.method !== "GET") {
-    res.setHeader("Allow", ["GET"]);
-    return res.status(405).end("Method Not Allowed");
-  }
-
+  // Verify admin user before exposing stats
   try {
+    const cookies = parseCookies({ req });
+    const sessionToken = cookies.session;
+    const authHeader = req.headers.authorization ?? "";
+    const bearerToken = authHeader.startsWith("Bearer ") ? authHeader.slice(7) : null;
+    const tokenToVerify = bearerToken || sessionToken;
+    if (!tokenToVerify) throw new Error("Unauthorized");
+    const decoded = await adminAuth.verifyIdToken(tokenToVerify);
+    const userEmail = decoded.email?.toLowerCase() ?? "";
+    const adminEmailsEnv = process.env.ADMIN_EMAILS || "";
+    const adminEmails = adminEmailsEnv.split(",").map((e) => e.trim().toLowerCase()).filter(Boolean);
+    if (!adminEmails.includes(userEmail)) throw new Error("Forbidden");
+
+    if (req.method !== "GET") {
+      res.setHeader("Allow", ["GET"]);
+      return res.status(405).end("Method Not Allowed");
+    }
+
     // Fetch all approved reports
     const snapshot = await adminFirestore
       .collection("reports")

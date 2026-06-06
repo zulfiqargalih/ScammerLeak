@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import EvidenceImage from "../../components/EvidenceImage";
 import { onAuthStateChanged, User } from "firebase/auth";
 import { auth } from "../../firebase/client";
 import Link from "next/link";
@@ -201,12 +202,24 @@ export default function Admin() {
                   )}
                   {/* Evidence Images */}
                   {report.evidenceUrls?.length > 0 && (
-                    <div className="space-y-2"><h4 className="section-label">Bukti Fisik / Screenshot</h4><div className="grid grid-cols-1 sm:grid-cols-2 gap-3">{report.evidenceUrls.map((url: string, idx: number) => (
-                      <a key={idx} href={url} target="_blank" rel="noopener noreferrer" className="border border-white/10 rounded-xl overflow-hidden hover:border-blue-500/40 transition-colors block bg-slate-950/40 p-2 group">
-                        <img src={url} alt={`Bukti ${idx + 1}`} className="max-h-[180px] w-full object-contain rounded-lg" />
-                        <p className="text-[10px] text-slate-600 group-hover:text-white text-center mt-2 flex items-center justify-center gap-1"><ZoomIn className="w-3 h-3" /> Klik untuk memperbesar</p>
-                      </a>
-                    ))}</div></div>
+                    <div className="space-y-2">
+                      <h4 className="section-label">Bukti Fisik / Screenshot</h4>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        {report.evidenceUrls.map((url: string, idx: number) => (
+                          // Existing reports may still contain full Supabase signed URLs.
+                          // If the URL starts with "http", render it directly.
+                          // Otherwise treat it as a storage path and use the secure EvidenceImage component.
+                          url.startsWith("http") ? (
+                            <a key={idx} href={url} target="_blank" rel="noopener noreferrer" className="border border-white/10 rounded-xl overflow-hidden hover:border-blue-500/40 transition-colors block bg-slate-950/40 p-2 group">
+                              <img src={url} alt={`Bukti ${idx + 1}`} className="max-h-[180px] w-full object-contain rounded-lg" />
+                              <p className="text-[10px] text-slate-600 group-hover:text-white text-center mt-2 flex items-center justify-center gap-1"><ZoomIn className="w-3 h-3" /> Klik untuk memperbesar</p>
+                            </a>
+                          ) : (
+                            <EvidenceImage key={idx} path={url} index={idx} />
+                          )
+                        ))}
+                      </div>
+                    </div>
                   )}
                   {/* Action Buttons */}
                   <div className="flex justify-end items-center gap-3 border-t border-white/5 pt-4">

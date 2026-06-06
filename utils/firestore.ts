@@ -6,7 +6,7 @@ export interface ReportData {
   title: string;
   chronology: string;
   ewalletDetails?: string;
-  evidenceUrls: string[]; // signed URLs
+  evidenceUrls: string[]; // storage object paths (not signed URLs)
   userId: string; // uid of reporting user
   userName: string;
   userEmail: string;

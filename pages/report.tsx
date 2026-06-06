@@ -15,10 +15,15 @@ import {
   Send,
   ArrowRight,
   ArrowLeft,
+  X,
+  Plus,
 } from "lucide-react";
 
 const STEPS = ["Info Kasus", "Bukti & Identitas", "Kirim"];
 const MAX_CHARS = 2000;
+const MAX_FILES = 7;
+const MAX_FILE_SIZE = 5 * 1024 * 1024; // 5MB
+
 // Limited to the six e‑wallet categories required for the new feature.
 // QRIS is treated as a provider here to simplify handling in the UI.
 const EWALLET_PROVIDERS = [
@@ -30,25 +35,16 @@ const EWALLET_PROVIDERS = [
   "QRIS",
 ];
 
-// Safe static classes for each upload type (avoids Tailwind purging dynamic classes)
-const UPLOAD_STYLES = {
-  qris: {
-    drag: "border-blue-500/70 bg-blue-500/5",
-    progress: "bg-blue-500",
-  },
-  post: {
-    drag: "border-emerald-500/70 bg-emerald-500/5",
-    progress: "bg-emerald-500",
-  },
-};
+interface EvidenceFile {
+  file: File;
+  preview: string;
+  uploadProgress?: number;
+}
 
 export default function Report() {
   const [user, setUser] = useState<User | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
-  const [uploadProgress, setUploadProgress] = useState<{
-    [key: string]: number;
-  }>({});
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
   const [currentStep, setCurrentStep] = useState(0);
@@ -57,12 +53,8 @@ export default function Report() {
   const [hasEwallet, setHasEwallet] = useState(false);
   const [ewalletProvider, setEwalletProvider] = useState("");
   const [ewalletAccount, setEwalletAccount] = useState("");
-  const [qrisFile, setQrisFile] = useState<File | null>(null);
-  const [postFile, setPostFile] = useState<File | null>(null);
-  const [qrisPreview, setQrisPreview] = useState<string | null>(null);
-  const [postPreview, setPostPreview] = useState<string | null>(null);
-  const [qrisDrag, setQrisDrag] = useState(false);
-  const [postDrag, setPostDrag] = useState(false);
+  const [evidenceFiles, setEvidenceFiles] = useState<EvidenceFile[]>([]);
+  const [isDragging, setIsDragging] = useState(false);
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (u) => {
@@ -72,64 +64,100 @@ export default function Report() {
     return () => unsubscribe();
   }, []);
 
-  const handleFileChange = (file: File | null, type: "qris" | "post") => {
-    if (!file) return;
-    if (file.size > 5 * 1024 * 1024) {
-      setError("Ukuran file tidak boleh melebihi 5MB.");
+  const addFiles = (files: FileList | null) => {
+    if (!files) return;
+
+    const newFiles: EvidenceFile[] = [];
+    const totalFiles = evidenceFiles.length + files.length;
+
+    if (totalFiles > MAX_FILES) {
+      setError(`Maksimal ${MAX_FILES} gambar yang diizinkan.`);
       return;
     }
-    if (!file.type.startsWith("image/")) {
-      setError("File harus berupa gambar (JPG, PNG, WEBP, dll).");
-      return;
-    }
-    setError(null);
-    const reader = new FileReader();
-    reader.onloadend = () => {
-      if (type === "qris") {
-        setQrisFile(file);
-        setQrisPreview(reader.result as string);
-      } else {
-        setPostFile(file);
-        setPostPreview(reader.result as string);
+
+    Array.from(files).forEach((file) => {
+      // Validate file size
+      if (file.size > MAX_FILE_SIZE) {
+        setError(`File "${file.name}" melebihi 5MB.`);
+        return;
       }
-    };
-    reader.readAsDataURL(file);
+
+      // Validate file type
+      if (!file.type.startsWith("image/")) {
+        setError(`"${file.name}" bukan file gambar.`);
+        return;
+      }
+
+      // Create preview
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        setEvidenceFiles((prev) => [
+          ...prev,
+          {
+            file,
+            preview: reader.result as string,
+            uploadProgress: 0,
+          },
+        ]);
+      };
+      reader.readAsDataURL(file);
+    });
+
+    setError(null);
+  };
+
+  const removeFile = (index: number) => {
+    setEvidenceFiles((prev) => prev.filter((_, i) => i !== index));
   };
 
   /**
    * Upload a single file to /api/upload (Supabase Storage via server-side upload).
-   * Returns the public HTTPS URL of the uploaded image.
+   * Returns the storage object path (not a signed URL).
    */
-  const uploadFile = async (file: File, type: string): Promise<string> => {
+  const uploadFile = async (file: File, fileIndex: number): Promise<string> => {
     if (!user) throw new Error("Not authenticated");
 
     const idToken = await user.getIdToken();
     const formData = new FormData();
     formData.append("file", file);
 
-    // Show progress indicator
-    setUploadProgress((p) => ({ ...p, [type]: 10 }));
+    // Update progress
+    setEvidenceFiles((prev) => {
+      const updated = [...prev];
+      if (updated[fileIndex]) updated[fileIndex].uploadProgress = 10;
+      return updated;
+    });
 
     const res = await fetch("/api/upload", {
       method: "POST",
       credentials: "include",
       headers: {
         Authorization: `Bearer ${idToken}`,
-        "x-file-type": type,
+        "x-file-type": `evidence_${fileIndex}`,
       },
       body: formData,
     });
 
-    setUploadProgress((p) => ({ ...p, [type]: 90 }));
+    setEvidenceFiles((prev) => {
+      const updated = [...prev];
+      if (updated[fileIndex]) updated[fileIndex].uploadProgress = 90;
+      return updated;
+    });
 
     if (!res.ok) {
       const d = await res.json().catch(() => ({}));
       throw new Error(d.error ?? `Upload gagal (${res.status})`);
     }
 
-    const { url } = await res.json(); // Supabase Storage returns { url, path }
-    setUploadProgress((p) => ({ ...p, [type]: 100 }));
-    return url;
+    const { path } = await res.json();
+
+    setEvidenceFiles((prev) => {
+      const updated = [...prev];
+      if (updated[fileIndex]) updated[fileIndex].uploadProgress = 100;
+      return updated;
+    });
+
+    return path;
   };
 
   const validateStep = (step: number): string | null => {
@@ -138,9 +166,9 @@ export default function Report() {
       if (!chronology.trim()) return "Kronologi kejadian wajib diisi.";
     }
     if (step === 1) {
-      // At least one evidence (QRIS photo or post screenshot) is required
-      if (!qrisFile && !postFile)
-        return "Sertakan minimal satu bukti gambar (QRIS atau screenshot postingan/chat).";
+      // At least one evidence is required
+      if (evidenceFiles.length === 0)
+        return "Sertakan minimal satu bukti gambar (screenshot, foto QRIS, dll).";
       // If user toggled E-Wallet, both fields are mandatory
       if (hasEwallet) {
         if (!ewalletProvider) return "Pilih provider E-Wallet terlebih dahulu.";
@@ -172,10 +200,13 @@ export default function Report() {
     setError(null);
 
     try {
-      // Upload files to Supabase Storage — returns public URLs
+      // Upload all evidence files to Supabase Storage
       const evidenceUrls: string[] = [];
-      if (qrisFile) evidenceUrls.push(await uploadFile(qrisFile, "qris"));
-      if (postFile) evidenceUrls.push(await uploadFile(postFile, "post"));
+      
+      for (let i = 0; i < evidenceFiles.length; i++) {
+        const path = await uploadFile(evidenceFiles[i].file, i);
+        evidenceUrls.push(path);
+      }
 
       if (evidenceUrls.length === 0) {
         throw new Error("Upload gagal. Pastikan file gambar valid dan coba lagi.");
@@ -218,11 +249,7 @@ export default function Report() {
     setHasEwallet(false);
     setEwalletProvider("");
     setEwalletAccount("");
-    setQrisFile(null);
-    setPostFile(null);
-    setQrisPreview(null);
-    setPostPreview(null);
-    setUploadProgress({});
+    setEvidenceFiles([]);
     setError(null);
   };
 
@@ -291,31 +318,6 @@ export default function Report() {
         </div>
       </>
     );
-
-  const uploadFields = [
-    {
-      type: "qris" as const,
-      label: "Foto QRIS Scammer",
-      Icon: Camera,
-      preview: qrisPreview,
-      file: qrisFile,
-      drag: qrisDrag,
-      setDrag: setQrisDrag,
-      progress: uploadProgress.qris,
-      styles: UPLOAD_STYLES.qris,
-    },
-    {
-      type: "post" as const,
-      label: "Screenshot Postingan / Chat",
-      Icon: ImageIcon,
-      preview: postPreview,
-      file: postFile,
-      drag: postDrag,
-      setDrag: setPostDrag,
-      progress: uploadProgress.post,
-      styles: UPLOAD_STYLES.post,
-    },
-  ];
 
   return (
     <>
@@ -538,83 +540,101 @@ export default function Report() {
                 )}
               </div>
 
-              {/* Upload Areas */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                {uploadFields.map(
-                  ({ type, label, Icon, preview, file, drag, setDrag, progress, styles }) => (
-                    <div
-                      key={type}
-                      className="glass bg-slate-900/30 p-5 rounded-2xl border border-white/8 flex flex-col gap-3"
-                    >
-                      <label
-                        htmlFor={`${type}-upload`}
-                        className="section-label block"
-                      >
-                        {label}
-                      </label>
-                      <div
-                        onDragOver={(e) => {
-                          e.preventDefault();
-                          setDrag(true);
-                        }}
-                        onDragLeave={() => setDrag(false)}
-                        onDrop={(e) => {
-                          e.preventDefault();
-                          setDrag(false);
-                          const f = e.dataTransfer.files?.[0];
-                          if (f) handleFileChange(f, type);
-                        }}
-                        className={`flex-1 flex flex-col items-center justify-center rounded-xl p-4 border-2 border-dashed transition-all relative min-h-[140px] cursor-pointer ${
-                          drag
-                            ? styles.drag
-                            : "border-white/10 hover:border-white/25"
-                        }`}
-                      >
-                        <input
-                          id={`${type}-upload`}
-                          type="file"
-                          accept="image/*"
-                          onChange={(e) =>
-                            handleFileChange(e.target.files?.[0] || null, type)
-                          }
-                          className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
-                          aria-label={label}
-                        />
-                        {preview ? (
-                          <div className="text-center space-y-2">
-                            <img
-                              src={preview}
-                              alt="Preview"
-                              className="max-h-[120px] rounded-lg object-contain mx-auto"
-                            />
-                            <p className="text-[10px] text-slate-500 truncate max-w-[140px]">
-                              {file?.name}
-                            </p>
-                          </div>
-                        ) : (
-                          <div className="text-center">
-                            <Icon className="w-8 h-8 text-slate-600 mx-auto mb-2" />
-                            <span className="text-xs text-slate-500 block">
-                              Klik atau drag &amp; drop
-                            </span>
-                            <span className="text-[10px] text-slate-600 block">
-                              Maks. 5MB · JPG, PNG, WEBP
-                            </span>
-                          </div>
-                        )}
-                      </div>
+              {/* Evidence Upload - Multiple Files */}
+              <div className="glass bg-slate-900/30 p-6 rounded-2xl border border-white/8 space-y-4">
+                <div>
+                  <label htmlFor="evidence-upload" className="section-label block">
+                    Bukti Gambar <span className="text-red-400">*</span>
+                  </label>
+                  <p className="text-xs text-slate-500 mt-1">
+                    Upload hingga {MAX_FILES} gambar (screenshot, foto QRIS, bukti chat, dll)
+                  </p>
+                </div>
 
-                      {/* Upload progress bar */}
-                      {(progress ?? 0) > 0 && (progress ?? 0) < 100 && (
-                        <div className="w-full bg-slate-950 rounded-full h-1 overflow-hidden">
-                          <div
-                            className={`${styles.progress} h-1 transition-all`}
-                            style={{ width: `${progress}%` }}
-                          />
-                        </div>
-                      )}
+                {/* Upload Area */}
+                <div
+                  onDragOver={(e) => {
+                    e.preventDefault();
+                    setIsDragging(true);
+                  }}
+                  onDragLeave={() => setIsDragging(false)}
+                  onDrop={(e) => {
+                    e.preventDefault();
+                    setIsDragging(false);
+                    addFiles(e.dataTransfer.files);
+                  }}
+                  className={`flex flex-col items-center justify-center rounded-xl p-6 border-2 border-dashed transition-all relative cursor-pointer ${
+                    isDragging
+                      ? "border-blue-500/70 bg-blue-500/5"
+                      : "border-white/10 hover:border-white/25 bg-slate-950/40"
+                  }`}
+                >
+                  <input
+                    id="evidence-upload"
+                    type="file"
+                    accept="image/*"
+                    multiple
+                    onChange={(e) => addFiles(e.target.files)}
+                    className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+                    disabled={evidenceFiles.length >= MAX_FILES}
+                    aria-label="Upload evidence images"
+                  />
+                  <div className="text-center space-y-2 pointer-events-none">
+                    <Camera className="w-8 h-8 text-slate-600 mx-auto" />
+                    <div>
+                      <p className="text-sm text-slate-300">
+                        Klik atau drag & drop gambar
+                      </p>
+                      <p className="text-[10px] text-slate-600 mt-1">
+                        Maks. {MAX_FILES} file · 5MB/file · JPG, PNG, WEBP
+                      </p>
                     </div>
-                  )
+                  </div>
+                </div>
+
+                {/* File List */}
+                {evidenceFiles.length > 0 && (
+                  <div className="space-y-3">
+                    <p className="text-xs text-slate-400">
+                      {evidenceFiles.length} / {MAX_FILES} file
+                    </p>
+                    <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
+                      {evidenceFiles.map((item, idx) => (
+                        <div
+                          key={idx}
+                          className="relative group rounded-lg overflow-hidden bg-slate-950/60 border border-white/10"
+                        >
+                          <img
+                            src={item.preview}
+                            alt={`Preview ${idx + 1}`}
+                            className="w-full aspect-square object-cover"
+                          />
+                          {/* Upload Progress */}
+                          {item.uploadProgress !== undefined && item.uploadProgress > 0 && item.uploadProgress < 100 && (
+                            <div className="absolute inset-0 bg-slate-900/40 flex items-center justify-center">
+                              <div className="text-xs text-white font-medium">
+                                {item.uploadProgress}%
+                              </div>
+                            </div>
+                          )}
+                          {/* Remove Button */}
+                          <button
+                            type="button"
+                            onClick={() => removeFile(idx)}
+                            disabled={submitting}
+                            className="absolute top-1 right-1 bg-red-600/80 hover:bg-red-600 text-white rounded-full p-1 opacity-0 group-hover:opacity-100 transition-opacity"
+                            aria-label={`Remove file ${idx + 1}`}
+                          >
+                            <X className="w-3.5 h-3.5" />
+                          </button>
+                          {/* File index badge */}
+                          <div className="absolute bottom-1 left-1 bg-slate-900/80 text-slate-300 text-[10px] px-2 py-0.5 rounded">
+                            #{idx + 1}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
                 )}
               </div>
 
@@ -667,13 +687,9 @@ export default function Report() {
                       : []),
                     {
                       dt: "Bukti",
-                      dd:
-                        [
-                          qrisFile && "Foto QRIS",
-                          postFile && "Screenshot",
-                        ]
-                          .filter(Boolean)
-                          .join(", ") || "Tidak ada",
+                      dd: evidenceFiles.length > 0 
+                        ? `${evidenceFiles.length} gambar`
+                        : "Tidak ada",
                     },
                   ].map(({ dt, dd }) => (
                     <div key={dt} className="flex gap-3">

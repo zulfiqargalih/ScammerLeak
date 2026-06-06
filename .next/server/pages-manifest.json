@@ -2,10 +2,15 @@
   "/_app": "pages/_app.js",
   "/_error": "pages/_error.js",
   "/_document": "pages/_document.js",
-  "/api/admin/review": "pages/api/admin/review.js",
-  "/api/reports": "pages/api/reports.js",
   "/": "pages/index.js",
+  "/report": "pages/report.js",
+  "/api/reports": "pages/api/reports.js",
+  "/api/admin/review": "pages/api/admin/review.js",
   "/api/stats": "pages/api/stats.js",
+  "/login": "pages/login.js",
+  "/admin": "pages/admin.js",
+  "/api/image/[...path]": "pages/api/image/[...path].js",
   "/api/auth": "pages/api/auth.js",
-  "/report/[id]": "pages/report/[id].js"
+  "/report/[id]": "pages/report/[id].js",
+  "/api/report/[reportId]/image/[index]": "pages/api/report/[reportId]/image/[index].js"
 }

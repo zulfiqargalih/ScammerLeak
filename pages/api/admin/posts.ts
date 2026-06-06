@@ -49,14 +49,19 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(200).json(reports);
   }
 
-  if (req.method === "DELETE") {
-    const { reportId } = req.body;
-    if (!reportId) {
-      return res.status(400).json({ error: "Missing reportId in request body." });
+    if (req.method === "DELETE") {
+      const { reportId } = req.body;
+      if (!reportId) {
+        return res.status(400).json({ error: "Missing reportId in request body." });
+      }
+      // Delete the report
+      await adminFirestore.collection("reports").doc(reportId).delete();
+      // Log the deletion for audit purposes
+      const adminEmail = await verifyAdmin(req); // reuse verification to get admin email
+      const { logDeletion } = await import("../../../utils/audit");
+      await logDeletion(adminEmail, reportId);
+      return res.status(200).json({ message: "Report deleted successfully." });
     }
-    await adminFirestore.collection("reports").doc(reportId).delete();
-    return res.status(200).json({ message: "Report deleted successfully." });
-  }
 
   if (req.method === "PUT") {
     const { reportId, updates } = req.body;

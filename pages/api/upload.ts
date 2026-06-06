@@ -7,6 +7,8 @@ import { parseCookies } from "nookies";
 import formidable, { File as FormidableFile } from "formidable";
 import fs from "fs";
 import path from "path";
+import sharp from "sharp";
+import { randomUUID } from "crypto";
 
 // Disable Next.js body parser so formidable can parse multipart/form-data
 export const config = {
@@ -69,25 +71,44 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(400).json({ error: "No file received." });
     }
 
-    // Validate MIME type
+    // Validate MIME type and extension
     const mime = rawFile.mimetype ?? "";
-    if (!mime.startsWith("image/")) {
-      return res.status(400).json({ error: "Only image files are allowed." });
+    const allowedMimes = ["image/png", "image/jpeg", "image/webp"]; // whitelist
+    if (!allowedMimes.includes(mime)) {
+      return res.status(400).json({ error: "Only PNG, JPEG, or WebP images are allowed." });
+    }
+    const fileExt = path.extname(rawFile.originalFilename || "").toLowerCase();
+    const allowedExts = [".png", ".jpg", ".jpeg", ".webp"];
+    if (!allowedExts.includes(fileExt)) {
+      return res.status(400).json({ error: "Unsupported file extension." });
     }
 
     const typeLabel = (req.headers["x-file-type"] as string) || "file";
-    const fileExt = path.extname(rawFile.originalFilename || "").toLowerCase() || ".jpg";
-    const fileName = `${typeLabel}_${Date.now()}${fileExt}`;
+    const fileName = `${typeLabel}_${randomUUID()}${fileExt}`;
     const filePath = `pengaduan-scammer/${uid}/${fileName}`;
 
-    // Read file and upload to Supabase Storage
-    const fileBuffer = fs.readFileSync(rawFile.filepath);
-    
+    // Read file, re‑encode with sharp to strip metadata and ensure safe format
+    const rawBuffer = fs.readFileSync(rawFile.filepath);
+    let processedBuffer: Buffer;
+    try {
+      // Convert extension (e.g., ".png") to Sharp format name (e.g., "png")
+      const format = fileExt.replace(".", "") as keyof import('sharp').FormatEnum;
+      processedBuffer = await sharp(rawBuffer)
+        .rotate() // correct orientation based on EXIF
+        .toFormat(format) // keep original format safely typed
+        .toBuffer();
+    } catch (e) {
+      console.error("Sharp processing error:", e);
+      return res.status(500).json({ error: "Image processing failed." });
+    }
+
     const { data, error } = await supabase.storage
       .from(bucketName)
-      .upload(filePath, fileBuffer, {
+      .upload(filePath, processedBuffer, {
         contentType: mime,
         upsert: false,
+        // Ensure the object is stored privately (default for Supabase, but explicit for clarity)
+        // No public flag is set; we will generate signed URLs when needed.
       });
 
     // Clean up temp file
@@ -98,15 +119,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(500).json({ error: "Supabase upload failed." });
     }
 
-    // Get public URL
-    const { data: { publicUrl } } = supabase.storage
-      .from(bucketName)
-      .getPublicUrl(data.path);
 
-    return res.status(200).json({
-      url: publicUrl,        // public HTTPS URL, stored in Firestore
-      path: data.path,       // Supabase storage path
-    });
+    // Return only the storage path. The client will request a signed URL via the /api/image endpoint when needed.
+    return res.status(200).json({ path: data.path });
   } catch (err: any) {
     console.error("[Upload API] Error:", err);
     return res.status(500).json({ error: err.message ?? "Upload failed." });

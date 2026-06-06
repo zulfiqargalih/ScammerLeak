@@ -1,8 +1,74 @@
 // pages/report/[id].tsx
 import { GetServerSideProps } from "next";
 import { adminFirestore } from "../../firebase/admin";
+import { extractObjectPath } from "../../utils/storage";
 import Link from "next/link";
 import Head from "next/head";
+import { useState } from "react";
+import { ZoomIn } from "lucide-react";
+
+/**
+ * Component to display evidence images via report-specific proxy endpoint.
+ * Uses /api/report/[reportId]/image/[index] which:
+ * 1. Authenticates the user
+ * 2. Verifies report is approved
+ * 3. Fetches and proxies the image (Supabase URL never exposed to client)
+ */
+function EvidenceImageDisplay({ 
+  reportId, 
+  imageIndex, 
+  objectPath 
+}: { 
+  reportId: string; 
+  imageIndex: number; 
+  objectPath: string;
+}) {
+  const [showModal, setShowModal] = useState(false);
+  
+  // Construct URL that won't expose Supabase details or token
+  // User will see: /api/report/[reportId]/image/[index]
+  const imageUrl = `/api/report/${reportId}/image/${imageIndex}`;
+
+  return (
+    <>
+      <a
+        href={imageUrl}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="border border-white/10 rounded-xl overflow-hidden hover:border-blue-500/50 transition-colors block bg-slate-950/40 p-3 group cursor-pointer"
+        onClick={(e) => {
+          // Allow modal preview on same page
+          if (!e.ctrlKey && !e.metaKey && !e.shiftKey) {
+            e.preventDefault();
+            setShowModal(true);
+          }
+        }}
+      >
+        <img
+          src={imageUrl}
+          alt={`Bukti Scammer ${imageIndex + 1}`}
+          className="max-h-[260px] w-full object-contain rounded-lg transition-transform duration-300 group-hover:scale-[1.01]"
+        />
+        <p className="text-[10px] text-slate-500 text-center block mt-3 hover:text-white transition-colors flex items-center justify-center gap-1">
+          <ZoomIn className="w-3 h-3" /> Klik untuk lihat full atau buka di tab baru
+        </p>
+      </a>
+
+      {showModal && (
+        <div
+          className="fixed inset-0 bg-black/70 flex items-center justify-center z-50"
+          onClick={() => setShowModal(false)}
+        >
+          <img
+            src={imageUrl}
+            alt={`Bukti Scammer ${imageIndex + 1}`}
+            className="max-w-full max-h-full object-contain"
+          />
+        </div>
+      )}
+    </>
+  );
+}
 
 interface ReportProps {
   report: {
@@ -10,7 +76,7 @@ interface ReportProps {
     title: string;
     chronology: string;
     ewalletDetails?: string;
-    evidenceUrls: string[];
+    evidenceUrls: string[]; // storage object paths (NOT signed URLs)
     userName: string;
     createdAt: string;
   };
@@ -97,23 +163,13 @@ export default function ReportDetail({ report }: ReportProps) {
                 Barang Bukti Transaksi / Chat
               </h3>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
-                {report.evidenceUrls.map((url, idx) => (
-                  <a
-                    key={idx}
-                    href={url}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="border border-white/10 rounded-xl overflow-hidden hover:border-blue-500/50 transition-colors block bg-slate-950/40 p-3 group"
-                  >
-                    <img
-                      src={url}
-                      alt={`Bukti Scammer ${idx + 1}`}
-                      className="max-h-[260px] w-full object-contain rounded-lg transition-transform duration-300 group-hover:scale-[1.01]"
-                    />
-                    <span className="text-[10px] text-slate-500 text-center block mt-3 hover:text-white transition-colors">
-                      🔍 Klik untuk memperbesar bukti
-                    </span>
-                  </a>
+                {report.evidenceUrls.map((objectPath, idx) => (
+                  <EvidenceImageDisplay 
+                    key={idx} 
+                    reportId={report.id}
+                    imageIndex={idx}
+                    objectPath={objectPath} 
+                  />
                 ))}
               </div>
             </div>
@@ -144,9 +200,25 @@ export const getServerSideProps: GetServerSideProps = async (context) => {
       return { notFound: true };
     }
 
-    // evidenceUrls sudah berupa URL publik (Supabase Storage atau Cloudinary)
-    // Tidak perlu generate signed URL lagi
-    const evidenceUrls = (data.evidenceUrls || []) as string[];
+    // evidenceUrls may be stored as storage paths (private) or full signed URLs from old records.
+    // Extract object paths and pass to component, which will use /api/image/ endpoint
+    const rawEvidence = (data.evidenceUrls || []) as (string | null)[];
+    const bucketName = process.env.SUPABASE_STORAGE_BUCKET || "report-images";
+    console.log("[Report SSP] Raw evidence from DB:", rawEvidence);
+    
+    const evidenceUrls = rawEvidence
+      .filter((p): p is string => typeof p === "string" && p !== null)
+      .map((p) => {
+        console.log("[Report SSP] Processing evidence item:", p);
+        
+        // Extract object path from whatever is stored (handles both full URLs and paths)
+        const objectPath = extractObjectPath(p, bucketName);
+        console.log("[Report SSP] Extracted object path:", objectPath);
+        
+        return objectPath;
+      });
+    
+    console.log("[Report SSP] Final object paths:", evidenceUrls);
 
     return {
       props: {
